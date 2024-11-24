@@ -1,0 +1,176 @@
+import dlib
+import face_recognition_models
+import face_recognition as fr
+import cv2 as cv
+import os
+import pandas as pd
+import time
+import numpy as np
+from imutils import face_utils
+
+
+# Load the CSV file
+csv_path = "C:/Users/nunna/Downloads/dl_project/hyndavi/NamesCSV.csv"
+df = pd.read_csv(csv_path)
+rows, columns = df.shape
+
+# Lists for tracking matches and filenames
+list1 = []
+list2 = []
+list3 = set()
+
+# Liveness Detection Function
+def detect_blink_and_capture(video_capture, duration=15):
+    import dlib
+    from imutils import face_utils
+    import numpy as np
+    import time
+
+    start_time = time.time()
+    predictor_path = "C:/Users/nunna/Downloads/shape_predictor_68_face_landmarks.dat"  # Update this path
+    detector = dlib.get_frontal_face_detector()
+    predictor = dlib.shape_predictor(predictor_path)
+
+    blink_detected = False
+    captured_frame = None
+
+    while time.time() - start_time < duration:
+        ret, frame = video_capture.read()
+        if not ret:
+            continue
+
+        gray_frame = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+        faces = detector(gray_frame)
+
+        for face in faces:
+            shape = predictor(gray_frame, face)
+            shape = face_utils.shape_to_np(shape)
+
+            # Get eye landmarks
+            left_eye = shape[36:42]
+            right_eye = shape[42:48]
+
+            # Compute eye aspect ratio (EAR)
+            def eye_aspect_ratio(eye):
+                A = np.linalg.norm(eye[1] - eye[5])
+                B = np.linalg.norm(eye[2] - eye[4])
+                C = np.linalg.norm(eye[0] - eye[3])
+                return (A + B) / (2.0 * C)
+
+            left_EAR = eye_aspect_ratio(left_eye)
+            right_EAR = eye_aspect_ratio(right_eye)
+
+            # Threshold to detect blink
+            EAR_threshold = 0.25
+            if left_EAR < EAR_threshold and right_EAR < EAR_threshold:
+                print("Blink detected!")
+                blink_detected = True
+                captured_frame = frame.copy()  # Save the frame with the blink detected
+                break
+
+        cv.imshow("Liveness Detection", frame)
+        if cv.waitKey(1) & 0xFF == ord('q'):
+            break
+
+        if blink_detected:
+            break
+
+    cv.destroyAllWindows()
+    return blink_detected, captured_frame
+
+# Initialize the camera
+camera = cv.VideoCapture(0)
+if not camera.isOpened():
+    print("Could not open the camera.")
+    exit()
+
+# Perform liveness detection and capture
+blink_detected, frame = detect_blink_and_capture(camera, duration=15)
+camera.release()
+
+if not blink_detected or frame is None:
+    print("Liveness detection failed or no frame captured. Ensure a live person is in front of the camera.")
+    exit()
+
+# Save the captured image after successful liveness detection
+captured_image_path = "captured_image.jpg"
+cv.imwrite(captured_image_path, frame)
+
+# Display the captured image
+cv.imshow("Captured Image", frame)
+cv.waitKey(0)
+cv.destroyAllWindows()
+
+# Process the captured image for face encoding
+target_image = fr.load_image_file(captured_image_path)
+target_encodings = fr.face_encodings(target_image)
+
+if not target_encodings:
+    print("No face detected in the captured image.")
+    exit()
+
+target_encoding = target_encodings[0]  # Use the first detected face encoding
+
+# Encode known faces
+def encode_faces(folder):
+    list_people_encoding = []
+    for filename in os.listdir(folder):
+        try:
+            known_image = fr.load_image_file(os.path.join(folder, filename))
+            known_encoding = fr.face_encodings(known_image)[0]
+            list_people_encoding.append((known_encoding, filename))
+        except IndexError:
+            print(f"No face detected in {filename}, skipping.")
+        except Exception as e:
+            print(f"Error processing {filename}: {e}")
+    return list_people_encoding
+
+# Match captured image against known faces
+def find_target_face():
+    known_faces_folder = "C:/Users/nunna/Downloads/dl_project/hyndavi/capstoneElection/capstoneElection"
+    face_locations = fr.face_locations(target_image)
+    for person in encode_faces(known_faces_folder):
+        encoded_face = person[0]
+        filename = person[1]
+        is_target_face = fr.compare_faces([encoded_face], target_encoding, tolerance=0.55)
+        list1.append(is_target_face)
+        list2.append(filename)
+        print(f'{is_target_face}: {filename}')
+        if face_locations and is_target_face[0]:
+            create_frame(face_locations[0], filename)
+
+# Annotate the image with detected face
+def create_frame(location, label):
+    top, right, bottom, left = location
+    cv.rectangle(frame, (left, top), (right, bottom), (255, 0, 0), 2)
+    cv.rectangle(frame, (left, bottom + 20), (right, bottom), (255, 0, 0), cv.FILLED)
+    cv.putText(frame, label, (left + 3, bottom + 14), cv.FONT_HERSHEY_DUPLEX, 0.4, (255, 255, 255), 1)
+
+# Attendance tracking
+def attendance():
+    for i in range(len(list1)):
+        if list1[i][0]:
+            list3.add(list2[i])
+
+    list4 = list(list3)
+    list5 = []
+
+    for filename in list4:
+        name = filename.split('_')[0].strip()
+        for j in range(rows):
+            if df.iloc[j, 0] == filename:
+                list5.append(df.iloc[j, 1])
+                break
+
+    # Print recognized names
+    if not list4:
+        print("No faces recognized.")
+        return
+
+    print("Recognized faces and their details:")
+    for i in range(len(list4)):
+        print(f"Filename: {list4[i]}, Name: {list5[i] if i < len(list5) else 'Not found in CSV'}")
+
+# Perform face matching
+find_target_face()
+attendance() 
