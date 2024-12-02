@@ -1,0 +1,166 @@
+import dlib
+import face_recognition as fr
+import cv2 as cv
+import os
+import pandas as pd
+import time
+import numpy as np
+from imutils import face_utils
+
+# Paths
+CSV_PATH = "C:/Users/nunna/Downloads/dl_project/hyndavi/NamesCSV.csv"
+KNOWN_FACES_FOLDER = "C:/Users/nunna/Downloads/dl_project/hyndavi/capstoneElection/capstoneElection"
+PREDICTOR_PATH = "C:/Users/nunna/Downloads/shape_predictor_68_face_landmarks.dat"
+CAPTURED_IMAGE_PATH = "captured_image.jpg"
+
+# Load CSV
+df = pd.read_csv(CSV_PATH)
+
+# Globals
+recognized_faces = set()
+
+# Liveness Detection Function
+def detect_blink_and_capture(video_capture, duration=15):
+    detector = dlib.get_frontal_face_detector()      #hug_face_detector
+    predictor = dlib.shape_predictor(PREDICTOR_PATH)  #dlib_facelandmark
+
+    start_time = time.time()
+    captured_frame = None
+
+    def eye_aspect_ratio(eye):
+        A = np.linalg.norm(eye[1] - eye[5])
+        B = np.linalg.norm(eye[2] - eye[4])
+        C = np.linalg.norm(eye[0] - eye[3])
+        return (A + B) / (2.0 * C)
+
+    while time.time() - start_time < duration:
+        ret, frame = video_capture.read()
+        if not ret:
+            continue
+
+        gray_frame = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+        faces = detector(gray_frame)      #Purpose: Detects faces in the grayscale frame using dlib's face detector.
+#Output: faces is a list of rectangles, each representing a detected face.
+
+#Purpose: For each detected face, predict 68 facial landmarks (e.g., eyes, nose, lips) using the shape predictor.
+#Conversion: The landmarks are converted into a NumPy array for easier manipulation.
+        for face in faces:
+            shape = predictor(gray_frame, face)
+            shape = face_utils.shape_to_np(shape)
+            left_eye = shape[36:42]
+            right_eye = shape[42:48]
+
+            if eye_aspect_ratio(left_eye) < 0.25 and eye_aspect_ratio(right_eye) < 0.25:
+                print("Blink detected!")
+                return True, frame.copy()
+
+        cv.imshow("Liveness Detection", frame)
+        if cv.waitKey(1) & 0xFF == ord('q'):
+            break
+
+    cv.destroyAllWindows()
+    return False, None
+
+# Encode Known Faces
+def encode_faces(folder):
+    encodings = []
+    for filename in os.listdir(folder):
+        try:
+            image = fr.load_image_file(os.path.join(folder, filename))
+            encoding = fr.face_encodings(image)[0]
+            encodings.append((encoding, filename))
+        except IndexError:
+            print(f"No face detected in {filename}, skipping.")
+        except Exception as e:
+            print(f"Error processing {filename}: {e}")
+    return encodings
+
+# Annotate Detected Faces
+def annotate_image(frame, location, label):
+    top, right, bottom, left = location
+    cv.rectangle(frame, (left, top), (right, bottom), (255, 0, 0), 2)
+    cv.rectangle(frame, (left, bottom + 20), (right, bottom), (255, 0, 0), cv.FILLED)
+    cv.putText(frame, label, (left + 3, bottom + 14), cv.FONT_HERSHEY_DUPLEX, 0.4, (255, 255, 255), 1)
+
+# Match Target Face
+def match_faces(target_encoding, known_encodings, frame):
+    face_locations = fr.face_locations(frame)
+    for location, (known_encoding, filename) in zip(face_locations, known_encodings):
+        match = fr.compare_faces([known_encoding], target_encoding, tolerance=0.55)[0]
+        if match:
+            recognized_faces.add(filename)
+            annotate_image(frame, location, filename)
+    return frame
+
+# Display Recognized Details
+#Inputs:
+#The global set recognized_faces containing filenames of matched faces.
+#The CSV data (df).
+#Process:
+#Extracts and prints the name and details for each recognized face.
+
+def display_recognized_details():
+    print("Recognized faces and their details:")
+    for filename in recognized_faces:
+        name = filename.split('_')[0].strip()
+        details = df[df.iloc[:, 0] == filename].iloc[0, 1] if not df.empty else "Details not found"
+        print(f"Filename: {filename}, Name: {name}, Details: {details}")
+
+# Main Program
+def main():
+    # Initialize Camera
+    camera = cv.VideoCapture(0)
+    if not camera.isOpened():
+        print("Could not open the camera.")
+        return
+
+    # Perform Liveness Detection
+    blink_detected, frame = detect_blink_and_capture(camera)
+    camera.release()
+
+    if not blink_detected or frame is None:
+        print("Liveness detection failed.")
+        return
+
+    # Save Captured Image
+    cv.imwrite(CAPTURED_IMAGE_PATH, frame)
+
+    # Process Captured Image
+    target_image = fr.load_image_file(CAPTURED_IMAGE_PATH)
+    target_encodings = fr.face_encodings(target_image)
+    if not target_encodings:
+        print("No face detected in the captured image.")
+        return
+
+    # Encode Known Faces and Match
+    known_encodings = encode_faces(KNOWN_FACES_FOLDER)
+    annotated_frame = match_faces(target_encodings[0], known_encodings, frame)
+
+    # Display Annotated Frame
+    cv.imshow("Matched Image", annotated_frame)
+    cv.waitKey(0)
+    cv.destroyAllWindows()
+
+    # Display Attendance
+    display_recognized_details()
+
+if __name__ == "__main__":
+    main()
+
+
+
+
+----------------------
+========================
+
+
+#Example Workflow:
+The program starts and opens the camera.
+You look at the camera and blink.
+The program detects the blink and captures the frame.
+It processes the captured frame to extract the face encoding.
+It compares your face with the known faces in the specified folder.
+If a match is found:
+The program annotates the face on the frame.
+It retrieves your name and details from the CSV file.
+Finally, the recognized details and annotated image are displayed.
